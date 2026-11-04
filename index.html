@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MetaClass RA</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg1:#dbe6ff;--bg2:#f4f7ff;--fg:#0f1530;--glass:rgba(255,255,255,.58);--line:rgba(15,21,48,.2);--acc:#2563eb;--accfg:#fff;--soft:rgba(15,21,48,.08)}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg1:#1b2a66;--bg2:#0b1020;--fg:#eef2ff;--glass:rgba(20,26,50,.55);--line:rgba(255,255,255,.24);--acc:#6ee7ff;--accfg:#0b1020;--soft:rgba(255,255,255,.12)}}
+:root[data-theme="dark"]{--bg1:#1b2a66;--bg2:#0b1020;--fg:#eef2ff;--glass:rgba(20,26,50,.55);--line:rgba(255,255,255,.24);--acc:#6ee7ff;--accfg:#0b1020;--soft:rgba(255,255,255,.12)}
+body{margin:0;height:100%;overflow:hidden;color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(circle at 30% 20%,var(--bg1),var(--bg2) 70%)}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#ui{position:fixed;inset:0;pointer-events:none}
+#gest{position:absolute;inset:0;pointer-events:auto;touch-action:none}
+.glass{position:absolute;pointer-events:auto;background:var(--glass);border:1px solid var(--line);border-radius:18px;padding:10px 14px;-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
+.top{top:10px;left:10px;right:10px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.panel{top:68px;left:10px;width:min(340px,calc(100% - 20px))}
+.chat{left:10px;right:10px;bottom:10px;max-width:560px}
+button{font:inherit;border:1px solid var(--line);background:var(--soft);color:var(--fg);border-radius:12px;padding:7px 11px;cursor:pointer}
+button.on,#ar{background:var(--acc);color:var(--accfg);border-color:transparent;font-weight:600}
+h2{margin:8px 0 4px;font-size:17px}p{margin:0 0 8px}
+#tabs,#parts,.ctl,.row{display:flex;gap:6px;flex-wrap:wrap}
+#parts{margin:6px 0}.row input{flex:1;min-width:120px;padding:8px;border-radius:12px;border:1px solid var(--line);background:var(--soft);color:var(--fg);font:inherit}
+#ans{max-height:22vh;overflow:auto;margin-bottom:8px;font-size:14px}
+#toast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:80%;text-align:center;display:none}
+.hide{display:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div id="gest"></div>
+  <header class="glass top">
+    <b>MetaClass RA</b><span id="peers">1 conectado</span>
+    <span class="ctl"><button id="tp">Panel</button><button id="ar">Entrar en RA</button></span>
+  </header>
+  <section class="glass panel" id="panel">
+    <nav id="tabs"></nav>
+    <h2 id="pt"></h2><p id="pb"></p>
+    <div id="parts"></div>
+    <div class="ctl"><button id="auto">Auto-giro</button><button id="clip">Sección</button><button id="reset">Reiniciar</button></div>
+  </section>
+  <section class="glass chat">
+    <div id="ans">Toca una parte del átomo y pregúntame lo que quieras.</div>
+    <div class="row"><button id="mic">🎤</button><input id="q" placeholder="Pregunta sobre lo que estás viendo…"><button id="ask">Preguntar</button></div>
+  </section>
+  <div class="glass" id="toast"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r149/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const use=n=>(window.claude&&window.claude.use?window.claude.use(n).catch(()=>null):Promise.resolve(null));
+const PARTS=[
+ {id:"nucleo",name:"Núcleo",color:0xef4444,desc:"Concentra protones y neutrones; contiene casi toda la masa del átomo."},
+ {id:"o1",name:"Capa interna",color:0x38bdf8,desc:"Primera capa: admite hasta 2 electrones."},
+ {id:"o2",name:"Capa externa",color:0xa78bfa,desc:"Segunda capa: admite hasta 8 electrones y define cómo se enlaza el átomo."},
+ {id:"e",name:"Electrones",color:0xfacc15,desc:"Partículas de carga negativa que orbitan alrededor del núcleo."}
+];
+const TABS=[
+ {t:"Descripción",b:"Átomo de carbono: 6 protones, 6 neutrones y 6 electrones (2 en la capa interna y 4 en la externa)."},
+ {t:"Explora",b:"Arrastra para rotar, pellizca o usa la rueda para escalar, y toca una parte para estudiarla."},
+ {t:"Actividad",b:"Activa «Sección», localiza el núcleo y pregunta a la IA por qué el carbono forma cuatro enlaces."}
+];
+const state={rotX:0.2,rotY:0,scale:1,auto:true,clip:false,tab:0,sel:null};
+
+// ---------- Escena
+const renderer=new THREE.WebGLRenderer({canvas:$("c"),antialias:true,alpha:true,powerPreference:"high-performance"});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.localClippingEnabled=true;renderer.xr.enabled=true;
+const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(55,1,0.01,30);
+scene.add(new THREE.HemisphereLight(0xffffff,0x445566,1.3));
+const sun=new THREE.DirectionalLight(0xffffff,1.3);sun.position.set(1,3,2);scene.add(sun);
+function resize(){renderer.setSize(innerWidth,innerHeight,false);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix()}
+addEventListener("resize",resize);resize();
+
+const clipPlane=new THREE.Plane(new THREE.Vector3(0,-1,0),0);
+const mats={};PARTS.forEach(p=>mats[p.id]=new THREE.MeshStandardMaterial({color:p.color,roughness:.35,metalness:.1,emissive:0x000000}));
+const root=new THREE.Group(),holder=new THREE.Group(),model=new THREE.Group();
+model.position.y=0.45;root.add(holder);holder.add(model);scene.add(root);
+const pick=[];
+function tag(m,id){m.userData.part=id;pick.push(m);return m}
+const sph=(r,id)=>tag(new THREE.Mesh(new THREE.SphereGeometry(r,20,20),mats[id]),id);
+const nuc=new THREE.Group();
+for(let i=0;i<12;i++){const m=sph(.045,"nucleo");const a=i*2.4,y=1-(i/11)*2,rr=Math.sqrt(1-y*y)*.06;m.position.set(Math.cos(a)*rr,y*.06,Math.sin(a)*rr);
+ if(i%2){m.material=mats.nucleo.clone();m.material.color.set(0x9ca3af);m.userData.alt=true}nuc.add(m)}
+model.add(nuc);
+const electrons=[];
+function orbit(id,r,tilt,n){const g=new THREE.Group();g.rotation.set(tilt[0],tilt[1],0);
+ g.add(tag(new THREE.Mesh(new THREE.TorusGeometry(r,.006,8,96),mats[id]),id));
+ for(let i=0;i<n;i++){const e=sph(.028,"e");g.add(e);electrons.push({e,r,a:i*Math.PI*2/n,sp:1.6/r})}
+ model.add(g)}
+orbit("o1",.2,[1.2,0],2);orbit("o2",.38,[.5,.6],4);
+
+// ---------- UI
+function buildUI(){
+ $("tabs").innerHTML="";TABS.forEach((t,i)=>{const b=document.createElement("button");b.textContent=t.t;b.onclick=()=>{state.tab=i;sync(true)};b.dataset.i=i;$("tabs").appendChild(b)});
+ PARTS.forEach(p=>{const b=document.createElement("button");b.textContent=p.name;b.dataset.id=p.id;b.onclick=()=>{state.sel=state.sel===p.id?null:p.id;sync(true)};$("parts").appendChild(b)});
+}
+function refresh(){
+ const sel=PARTS.find(p=>p.id===state.sel);
+ $("pt").textContent=sel?sel.name:TABS[state.tab].t;
+ $("pb").textContent=sel?sel.desc:TABS[state.tab].b;
+ document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",+b.dataset.i===state.tab&&!sel));
+ document.querySelectorAll("#parts button").forEach(b=>b.classList.toggle("on",b.dataset.id===state.sel));
+ $("auto").classList.toggle("on",state.auto);$("clip").classList.toggle("on",state.clip);
+ PARTS.forEach(p=>{mats[p.id].emissive.set(p.id===state.sel?0x335577:0x000000);mats[p.id].clippingPlanes=state.clip?[clipPlane]:[];mats[p.id].side=state.clip?THREE.DoubleSide:THREE.FrontSide;mats[p.id].needsUpdate=true});
+ pick.forEach(m=>{if(m.userData.alt){m.material.clippingPlanes=state.clip?[clipPlane]:[];m.material.side=state.clip?THREE.DoubleSide:THREE.FrontSide;m.material.needsUpdate=true}});
+}
+$("auto").onclick=()=>{state.auto=!state.auto;sync(true)};
+$("clip").onclick=()=>{state.clip=!state.clip;sync(true)};
+$("reset").onclick=()=>{Object.assign(state,{rotX:.2,rotY:0,scale:1,clip:false,sel:null});sync(true)};
+$("tp").onclick=()=>$("panel").classList.toggle("hide");
+for(const id of["panel","ans"]);document.querySelectorAll(".glass").forEach(el=>el.addEventListener("beforexrselect",e=>e.preventDefault()));
+function toast(t){const el=$("toast");el.textContent=t;el.style.display="block";setTimeout(()=>el.style.display="none",5000)}
+
+// ---------- Sincronización multiusuario (room)
+let room=null,lastSend=0;
+function sync(force){refresh();const n=performance.now();if(!room||(!force&&n-lastSend<60))return;lastSend=n;room.emit("state",{...state}).catch(()=>{})}
+(async()=>{room=await use("room");if(!room)return;
+ room.on("state",m=>{if(m.isMe||!m.data)return;Object.assign(state,m.data);refresh()});
+ room.onPeers(c=>{$("peers").textContent=(c.peers.length+1)+" conectados"});
+ room.emit("state",{...state}).catch(()=>{});
+})();
+
+// ---------- Interacción (gestos + selección)
+const ray=new THREE.Raycaster(),ptrs=new Map();let pinch0=0,sc0=1,moved=0,down=null;
+const g=$("gest");
+function pickAt(x,y){ray.setFromCamera({x:x/innerWidth*2-1,y:-(y/innerHeight)*2+1},camera);
+ const h=ray.intersectObjects(pick,false)[0];state.sel=h?h.object.userData.part:null;sync(true)}
+g.addEventListener("pointerdown",e=>{g.setPointerCapture(e.pointerId);ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});moved=0;down={x:e.clientX,y:e.clientY};
+ if(ptrs.size===2){const [a,b]=[...ptrs.values()];pinch0=Math.hypot(a.x-b.x,a.y-b.y);sc0=state.scale}});
+g.addEventListener("pointermove",e=>{const p=ptrs.get(e.pointerId);if(!p)return;
+ if(ptrs.size===2){p.x=e.clientX;p.y=e.clientY;const [a,b]=[...ptrs.values()];state.scale=Math.min(4,Math.max(.3,sc0*Math.hypot(a.x-b.x,a.y-b.y)/pinch0));moved=99}
+ else{const dx=e.clientX-p.x,dy=e.clientY-p.y;moved+=Math.abs(dx)+Math.abs(dy);state.rotY+=dx*.01;state.rotX=Math.max(-1.2,Math.min(1.2,state.rotX+dy*.01));p.x=e.clientX;p.y=e.clientY}
+ if(moved>6)sync(false)});
+const up=e=>{ptrs.delete(e.pointerId);if(down&&moved<6&&!renderer.xr.isPresenting)pickAt(down.x,down.y);down=null};
+g.addEventListener("pointerup",up);g.addEventListener("pointercancel",e=>{ptrs.delete(e.pointerId);down=null});
+g.addEventListener("wheel",e=>{e.preventDefault();state.scale=Math.min(4,Math.max(.3,state.scale*(e.deltaY>0?.93:1.07)));sync(false)},{passive:false});
+
+// ---------- Realidad aumentada (WebXR hit-test + anchors)
+const reticle=new THREE.Mesh(new THREE.RingGeometry(.08,.1,32).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({color:0x6ee7ff}));
+reticle.matrixAutoUpdate=false;reticle.visible=false;scene.add(reticle);
+let hitSource=null,lastHit=null,anchor=null,placed=false,xrSession=null,focusId=null,lastFocus=0;
+const ctrl=renderer.xr.getController(0);scene.add(ctrl);
+ctrl.addEventListener("select",async()=>{
+ if(moved>6)return;
+ if(!placed){if(!reticle.visible)return;root.position.setFromMatrixPosition(reticle.matrix);root.quaternion.setFromRotationMatrix(reticle.matrix);
+  root.visible=true;placed=true;reticle.visible=false;try{anchor=(await lastHit.createAnchor?.())||null}catch(_){anchor=null}return}
+ const m=new THREE.Matrix4().extractRotation(ctrl.matrixWorld);ray.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);ray.ray.direction.set(0,0,-1).applyMatrix4(m);
+ const h=ray.intersectObjects(pick,false)[0];state.sel=h?h.object.userData.part:null;sync(true)});
+$("ar").onclick=async()=>{
+ if(xrSession){xrSession.end();return}
+ try{
+  if(!navigator.xr||!(await navigator.xr.isSessionSupported("immersive-ar")))throw 0;
+  xrSession=await navigator.xr.requestSession("immersive-ar",{requiredFeatures:["hit-test"],optionalFeatures:["dom-overlay","anchors"],domOverlay:{root:$("ui")}});
+  await renderer.xr.setSession(xrSession);
+  const vs=await xrSession.requestReferenceSpace("viewer");hitSource=await xrSession.requestHitTestSource({space:vs});
+  placed=false;anchor=null;root.visible=false;$("ar").textContent="Salir de RA";toast("Apunta a una superficie y toca para colocar el átomo");
+  xrSession.addEventListener("end",()=>{xrSession=null;hitSource=null;placed=false;anchor=null;root.visible=true;root.position.set(0,0,0);root.quaternion.identity();reticle.visible=false;$("ar").textContent="Entrar en RA"});
+ }catch(e){xrSession=null;toast("La RA no está disponible aquí (hace falta Chrome en Android con ARCore, y el visor incrustado puede bloquear WebXR). Abre el enlace directamente en el móvil. Mientras tanto, usa el visor 3D.")}
+};
+
+// ---------- Asistente de IA (texto + voz)
+let ctl=null;
+const speak=t=>{try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang="es-ES";speechSynthesis.speak(u)}catch(_){}};
+async function ask(){
+ const q=$("q").value.trim();if(!q)return;
+ const sample=await use("sample");if(!sample){$("ans").textContent="El asistente de IA no está disponible en esta vista.";return}
+ const part=PARTS.find(p=>p.id===(state.sel||focusId));
+ ctl&&ctl.abort();ctl=new AbortController();$("ans").textContent="Pensando…";
+ try{const r=await sample("Eres el asistente de un aula de realidad aumentada. Responde en español, en máximo 4 frases y con claridad didáctica.\nObjeto 3D: modelo atómico del carbono (núcleo, capa interna con 2 electrones, capa externa con 4).\nParte enfocada: "+(part?part.name:"ninguna")+"\nPregunta del estudiante: "+q,{cache:false,signal:ctl.signal,onText:({text})=>{$("ans").textContent=text}});
+  speak(r.text)}catch(e){if(e&&e.code!=="aborted")$("ans").textContent="No pude responder ahora ("+((e&&e.code)||"error")+")."}
+}
+$("ask").onclick=ask;$("q").addEventListener("keydown",e=>e.key==="Enter"&&ask());
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+if(SR){const rec=new SR();rec.lang="es-ES";rec.onresult=e=>{$("q").value=e.results[0][0].transcript;ask()};$("mic").onclick=()=>{try{rec.start()}catch(_){}}}else $("mic").classList.add("hide");
+
+// ---------- Bucle
+buildUI();refresh();
+const clock=new THREE.Clock(),v=new THREE.Vector3(),d=new THREE.Vector3();
+renderer.setAnimationLoop((now,frame)=>{
+ const dt=Math.min(clock.getDelta(),.05),xr=renderer.xr.isPresenting;
+ if(xr&&frame){const ref=renderer.xr.getReferenceSpace();
+  if(hitSource&&!placed){const hs=frame.getHitTestResults(hitSource);if(hs.length){lastHit=hs[0];reticle.matrix.fromArray(lastHit.getPose(ref).transform.matrix);reticle.visible=true}else reticle.visible=false}
+  if(anchor&&frame.trackedAnchors&&frame.trackedAnchors.has(anchor)){const p=frame.getPose(anchor.anchorSpace,ref);if(p){root.matrix.fromArray(p.transform.matrix);root.matrix.decompose(root.position,root.quaternion,root.scale)}}
+  if(placed&&now-lastFocus>150){lastFocus=now;camera.getWorldPosition(v);camera.getWorldDirection(d);ray.set(v,d);const h=ray.intersectObjects(pick,false)[0];focusId=h?h.object.userData.part:null}
+ }else{camera.position.set(0,.55,2.1);camera.lookAt(0,.45,0)}
+ if(state.auto)state.rotY+=dt*.6;
+ const S=(xr?.4:1)*state.scale;holder.rotation.set(state.rotX,state.rotY,0);holder.scale.setScalar(S);
+ electrons.forEach(o=>{o.a+=dt*o.sp;o.e.position.set(Math.cos(o.a)*o.r,Math.sin(o.a)*o.r,0)});
+ clipPlane.constant=root.position.y+.45*S;
+ renderer.render(scene,camera);
+});
+</script>
+</body>
+</html>
